@@ -309,7 +309,11 @@ async function refresh() {
 
 // ---------- routing (#stop/72) ----------
 
+// True when the stop was opened from the home screen, so Back can return there via history.
+let openedFromHome = false;
+
 function openStop(id) {
+  openedFromHome = true;
   location.hash = `#stop/${id}`;
 }
 
@@ -337,6 +341,7 @@ function route() {
     timer = setInterval(refresh, REFRESH_MS);
   } else {
     currentStop = null;
+    openedFromHome = false;
     $("home").hidden = false;
     $("stop-view").hidden = true;
     $("back-btn").hidden = true;
@@ -370,7 +375,8 @@ $("locate-btn").addEventListener("click", findNearby);
 $("fav-btn").addEventListener("click", () => currentStop && toggleFavorite(currentStop));
 
 $("back-btn").addEventListener("click", () => {
-  if (history.length > 1) history.back();
+  // Opened from a direct link: go to the home screen instead of leaving the site.
+  if (openedFromHome) history.back();
   else location.hash = "";
 });
 
