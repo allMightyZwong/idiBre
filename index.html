@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>idiBre · Madrid bus times</title>
   <meta name="theme-color" content="#d4002a">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -10,30 +10,42 @@
 </head>
 <body>
   <header>
-    <h1>idiBre</h1>
-    <form id="add-form" autocomplete="off">
-      <input id="stop-input" inputmode="numeric" pattern="\d{1,6}" placeholder="Stop number, e.g. 72" aria-label="Stop number" required>
-      <button type="submit">Add</button>
-    </form>
+    <button id="back-btn" class="icon" type="button" aria-label="Back" hidden>&#8592;</button>
+    <h1 id="title">idiBre</h1>
+    <button id="fav-btn" class="icon star" type="button" aria-label="Save as favorite" aria-pressed="false" hidden>&#9734;</button>
   </header>
 
-  <nav id="saved" aria-label="Saved stops"></nav>
-
   <main>
-    <section id="stop-panel" hidden>
-      <div class="stop-head">
-        <div>
-          <h2 id="stop-name"></h2>
-          <p id="stop-meta"></p>
-        </div>
-        <button id="remove-btn" class="ghost" type="button" title="Remove this stop">Remove</button>
+    <section id="home">
+      <form id="add-form" autocomplete="off">
+        <input id="stop-input" inputmode="numeric" pattern="\d{1,6}" placeholder="Stop number, e.g. 72" aria-label="Stop number" required>
+        <button type="submit">Open</button>
+      </form>
+
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="favorites">&#9733; Favorites</button>
+        <button type="button" role="tab" data-tab="nearby">&#9673; Nearby</button>
       </div>
+
+      <div id="favorites-panel" role="tabpanel">
+        <ul id="fav-list" class="stops"></ul>
+        <p id="fav-empty" class="hint">No favorites yet. Open a stop by number or from <b>Nearby</b>, then tap &#9734; to save it here.</p>
+      </div>
+
+      <div id="nearby-panel" role="tabpanel" hidden>
+        <button id="locate-btn" class="secondary" type="button">Find stops near me</button>
+        <ul id="nearby-list" class="stops"></ul>
+        <p id="nearby-status" class="hint"></p>
+      </div>
+    </section>
+
+    <section id="stop-view" hidden>
+      <p id="stop-meta" class="hint"></p>
       <ul id="arrivals"></ul>
-      <p id="updated"></p>
+      <p id="updated" class="hint"><span class="live-dot"></span><span id="updated-text"></span></p>
       <div id="map"></div>
     </section>
 
-    <p id="empty">Add a bus stop number to see when the next buses arrive. You'll find it on the sign at the stop.</p>
     <p id="error" role="alert" hidden></p>
   </main>
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">idiBre</string>
+    <!-- The deployed web app this Android app shows. Change it if your Vercel address changes. -->
+    <string name="app_url" translatable="false">https://idibre.vercel.app/</string>
+</resources>
