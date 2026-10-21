@@ -1,0 +1,10 @@
+{
+  "name": "idibre",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Simple Madrid EMT bus arrival times with a map",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  }
+}
