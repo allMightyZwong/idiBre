@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>idiBre · Madrid bus times</title>
+  <meta name="theme-color" content="#d4002a">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>idiBre</h1>
+    <form id="add-form" autocomplete="off">
+      <input id="stop-input" inputmode="numeric" pattern="\d{1,6}" placeholder="Stop number, e.g. 72" aria-label="Stop number" required>
+      <button type="submit">Add</button>
+    </form>
+  </header>
+
+  <nav id="saved" aria-label="Saved stops"></nav>
+
+  <main>
+    <section id="stop-panel" hidden>
+      <div class="stop-head">
+        <div>
+          <h2 id="stop-name"></h2>
+          <p id="stop-meta"></p>
+        </div>
+        <button id="remove-btn" class="ghost" type="button" title="Remove this stop">Remove</button>
+      </div>
+      <ul id="arrivals"></ul>
+      <p id="updated"></p>
+      <div id="map"></div>
+    </section>
+
+    <p id="empty">Add a bus stop number to see when the next buses arrive. You'll find it on the sign at the stop.</p>
+    <p id="error" role="alert" hidden></p>
+  </main>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
