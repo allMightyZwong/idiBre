@@ -3,20 +3,28 @@ const OLD_KEY = "idibre.stops";
 const TAB_KEY = "idibre.tab";
 const REFRESH_MS = 15000;
 const NO_ESTIMATE = 999999;
+const SOON_SECONDS = 180;
 
 const $ = (id) => document.getElementById(id);
 
+const CHEVRON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA2AD" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
+const BUS_GLYPH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#B0001A" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><rect x="5" y="4" width="14" height="13" rx="2.5"/><path d="M8 20v-3M16 20v-3"/></svg>';
+
 let favorites = loadFavorites();
 let tab = storageGet(TAB_KEY) === "nearby" ? "nearby" : "favorites";
+let editing = false;
 let nearby = [];
 let userPos = null;
 
 let currentStop = null; // { id, name } of the stop being shown
-let timer = null;
+let openedFromHome = false; // so Back can return via history instead of leaving the site
+let stopTimer = null;
+let heroTimer = null;
+
 let map = null;
 let stopMarker = null;
 let userMarker = null;
-let busMarkers = new Map();
+const busMarkers = new Map();
 let fitted = false;
 
 // ---------- storage ----------
@@ -48,11 +56,17 @@ function toggleFavorite(stop) {
   if (isFavorite(stop.id)) favorites = favorites.filter((f) => f.id !== stop.id);
   else favorites.push({ id: stop.id, name: stop.name });
   saveFavorites();
-  renderHome();
   renderFavButton();
 }
 
 // ---------- helpers ----------
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text != null) node.textContent = text;
+  return node;
+}
 
 async function getJson(url) {
   const res = await fetch(url);
@@ -61,9 +75,12 @@ async function getJson(url) {
   return body;
 }
 
+let errorTimer = null;
 function showError(message) {
   $("error").textContent = message || "";
   $("error").hidden = !message;
+  clearTimeout(errorTimer);
+  if (message) errorTimer = setTimeout(() => showError(""), 6000);
 }
 
 function formatEta(seconds) {
@@ -73,53 +90,85 @@ function formatEta(seconds) {
 }
 
 function formatDistance(m) {
+  if (!(m >= 0)) return "";
   return m >= 1000 ? `${(m / 1000).toFixed(1)} km` : `${Math.round(m)} m`;
+}
+
+function formatAway(m) {
+  if (!(m >= 0)) return "";
+  return m < 30 ? "At the stop" : `${formatDistance(m)} away`;
+}
+
+const SMALL_WORDS = new Set(["de", "del", "la", "las", "el", "los", "y", "a", "en"]);
+
+// EMT sends destinations in capitals ("PUERTA DE TOLEDO"); show them as "Puerta de Toledo".
+function titleCase(s) {
+  return String(s || "")
+    .toLowerCase()
+    .split(" ")
+    .map((w, i) => {
+      if (i && SMALL_WORDS.has(w)) return w;
+      if (/^[ivx]{2,}$/.test(w)) return w.toUpperCase(); // roman numerals: "Pio XII"
+      return w.charAt(0).toUpperCase() + w.slice(1);
+    })
+    .join(" ");
 }
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
-// ---------- home: favorites + nearby ----------
+// One entry per line + destination, each with its buses in arrival order (next, then the one after).
+function groupByLine(arrivals) {
+  const groups = new Map();
+  for (const a of arrivals) {
+    const key = `${a.line}|${a.destination}`;
+    if (!groups.has(key)) groups.set(key, { line: a.line, destination: titleCase(a.destination), buses: [] });
+    groups.get(key).buses.push(a);
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g, buses: g.buses.sort((x, y) => x.seconds - y.seconds) }))
+    .sort((x, y) => x.buses[0].seconds - y.buses[0].seconds);
+}
 
-function stopRow(stop, subtitle) {
+const fetchArrivals = (id) => getJson(`/api/arrivals?stop=${encodeURIComponent(id)}`);
+
+// ---------- home ----------
+
+function stopRow(stop, subtitle, tall) {
   const li = document.createElement("li");
-  const id = document.createElement("span");
-  id.className = "stop-id";
-  id.textContent = stop.id;
+  const row = el("a", "stop-row" + (tall ? " tall" : ""));
+  row.href = `#stop/${stop.id}`;
+  row.addEventListener("click", () => { openedFromHome = true; });
 
-  const text = document.createElement("div");
-  text.className = "stop-text";
-  const name = document.createElement("div");
-  name.className = "stop-name";
-  name.textContent = stop.name;
-  text.appendChild(name);
-  if (subtitle) {
-    const sub = document.createElement("div");
-    sub.className = "stop-sub";
-    sub.textContent = subtitle;
-    text.appendChild(sub);
+  const text = el("span", "stop-text");
+  text.appendChild(el("span", "stop-name", stop.name));
+  if (subtitle) text.appendChild(el("span", "stop-sub", subtitle));
+  row.append(el("span", "stop-id", stop.id), text);
+
+  if (editing && isFavorite(stop.id) && !subtitle) {
+    const remove = el("button", "remove-btn", "Remove");
+    remove.type = "button";
+    remove.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      favorites = favorites.filter((f) => f.id !== stop.id);
+      saveFavorites();
+      if (!favorites.length) editing = false;
+      renderHome();
+      refreshHero();
+    });
+    row.appendChild(remove);
+  } else {
+    row.insertAdjacentHTML("beforeend", CHEVRON);
   }
 
-  const star = document.createElement("button");
-  star.type = "button";
-  star.className = "row-star";
-  const fav = isFavorite(stop.id);
-  star.textContent = fav ? "★" : "☆";
-  star.setAttribute("aria-pressed", String(fav));
-  star.setAttribute("aria-label", fav ? "Remove from favorites" : "Save as favorite");
-  star.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleFavorite(stop);
-  });
-
-  li.append(id, text, star);
-  li.addEventListener("click", () => openStop(stop.id));
+  li.appendChild(row);
   return li;
 }
 
 function renderHome() {
-  for (const btn of document.querySelectorAll(".tabs button")) {
+  for (const btn of document.querySelectorAll(".segmented button")) {
     btn.setAttribute("aria-selected", String(btn.dataset.tab === tab));
   }
   $("favorites-panel").hidden = tab !== "favorites";
@@ -128,13 +177,81 @@ function renderHome() {
   const favList = $("fav-list");
   favList.innerHTML = "";
   for (const f of favorites) favList.appendChild(stopRow(f));
+  $("saved-section").hidden = favorites.length === 0;
   $("fav-empty").hidden = favorites.length > 0;
+  $("edit-btn").textContent = editing ? "Done" : "Edit";
+  if (!favorites.length) $("hero").hidden = true;
 
   const nearList = $("nearby-list");
   nearList.innerHTML = "";
   for (const s of nearby) {
-    const lines = s.lines.length ? `Lines ${s.lines.join(", ")}` : "";
-    nearList.appendChild(stopRow(s, [formatDistance(s.distance), lines].filter(Boolean).join(" · ")));
+    const lines = s.lines.length ? s.lines.join(", ") : "";
+    nearList.appendChild(stopRow(s, [formatDistance(s.distance), lines].filter(Boolean).join(" · "), true));
+  }
+  $("locate-btn").textContent = nearby.length ? "Refresh location" : "Find stops near me";
+}
+
+// The dark card on the home screen: live next bus at the first favorite.
+function renderHero(stop, data) {
+  const hero = $("hero");
+  hero.href = `#stop/${stop.id}`;
+  hero.innerHTML = "";
+
+  const head = el("div", "hero-head");
+  head.appendChild(el("span", "hero-stop", `${data ? data.stop.name : stop.name} · ${stop.id}`));
+  const live = el("span", "hero-live");
+  live.append(el("span", "dot"), document.createTextNode("Live"));
+  head.appendChild(live);
+  hero.appendChild(head);
+
+  const groups = data ? groupByLine(data.arrivals) : [];
+  if (!data || !groups.length) {
+    hero.appendChild(el("div", "hero-note", data ? "No buses expected right now." : "Loading…"));
+    hero.hidden = false;
+    return;
+  }
+
+  const [first, ...rest] = groups;
+  const bus = first.buses[0];
+  const main = el("div", "hero-main");
+  const left = el("div", "hero-line");
+  left.append(el("span", "line-badge", first.line), el("span", "hero-dest", `to ${first.destination}`));
+  const right = el("div", "hero-eta");
+  right.append(
+    el("div", "big" + (bus.seconds < SOON_SECONDS ? " soon" : ""), formatEta(bus.seconds)),
+    el("div", "small", bus.seconds < NO_ESTIMATE ? formatAway(bus.distance) : "")
+  );
+  main.append(left, right);
+  hero.append(main, el("div", "hero-divider"));
+
+  const chips = el("div", "hero-chips");
+  for (const g of rest.slice(0, 2)) {
+    const chip = el("span", "chip");
+    chip.append(el("b", null, g.line), document.createTextNode(formatEta(g.buses[0].seconds)));
+    chips.appendChild(chip);
+  }
+  const all = el("span", "hero-all", "All");
+  all.insertAdjacentHTML("beforeend", '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>');
+  chips.appendChild(all);
+  hero.appendChild(chips);
+  hero.hidden = false;
+}
+
+async function refreshHero() {
+  const stop = favorites[0];
+  if (!stop || currentStop) {
+    if (!stop) $("hero").hidden = true;
+    return;
+  }
+  if ($("hero").hidden || $("hero").dataset.stop !== stop.id) {
+    $("hero").dataset.stop = stop.id;
+    renderHero(stop, null);
+  }
+  try {
+    const data = await fetchArrivals(stop.id);
+    if (favorites[0] && favorites[0].id === stop.id && !currentStop) renderHero(stop, data);
+  } catch (err) {
+    showError(err.message);
   }
 }
 
@@ -152,7 +269,6 @@ function findNearby() {
         const data = await getJson(`/api/nearby?lat=${userPos[0]}&lng=${userPos[1]}&radius=500`);
         nearby = data.stops;
         $("nearby-status").textContent = nearby.length ? "" : "No EMT stops within 500 m.";
-        showError("");
       } catch (err) {
         $("nearby-status").textContent = "";
         showError(err.message);
@@ -169,57 +285,96 @@ function findNearby() {
   );
 }
 
-// ---------- stop view ----------
+// ---------- stop page ----------
 
 function renderFavButton() {
-  const btn = $("fav-btn");
   if (!currentStop) return;
   const fav = isFavorite(currentStop.id);
-  btn.innerHTML = fav ? "&#9733;" : "&#9734;";
-  btn.setAttribute("aria-pressed", String(fav));
-  btn.setAttribute("aria-label", fav ? "Remove from favorites" : "Save as favorite");
+  $("fav-btn").setAttribute("aria-pressed", String(fav));
+  $("fav-btn").setAttribute("aria-label", fav ? "Remove from favorites" : "Add to favorites");
 }
 
-function renderArrivals(data) {
-  $("title").textContent = data.stop.name;
-  $("stop-meta").textContent = [`Stop ${data.stop.id}`, data.stop.address].filter(Boolean).join(" · ");
+function renderNextCard(groups) {
+  const card = $("next-card");
+  card.innerHTML = "";
+  if (!groups.length) {
+    card.appendChild(el("span", "eyebrow", "Next bus"));
+    card.appendChild(el("div", "dest", "No buses expected right now."));
+    return;
+  }
 
-  const list = $("arrivals");
+  const first = groups[0];
+  const bus = first.buses[0];
+  const after = first.buses[1];
+  const hasEstimate = bus.seconds < NO_ESTIMATE;
+
+  const head = el("div", "row-between");
+  head.append(el("span", "eyebrow", "Next bus"), el("span", "away", hasEstimate ? formatAway(bus.distance) : ""));
+
+  const main = el("div", "hero-main");
+  const left = el("div", "hero-line");
+  left.append(el("span", "line-badge", first.line), el("span", "dest", first.destination));
+  if (after) left.appendChild(el("span", "then", `then ${formatEta(after.seconds)}`));
+  main.append(left, el("div", "big", formatEta(bus.seconds)));
+
+  card.append(head, main);
+
+  // How far along its approach the bus is: closer to the stop = further right.
+  if (hasEstimate) {
+    const pct = Math.round(Math.max(0.06, Math.min(0.94, 1 - bus.distance / 1500)) * 100);
+    const progress = el("div", "progress");
+    const rail = el("div", "rail");
+    const fill = el("div", "fill");
+    fill.style.width = `${pct}%`;
+    const marker = el("div", "bus");
+    marker.style.left = `${pct}%`;
+    marker.innerHTML = BUS_GLYPH;
+    progress.append(rail, fill, marker, el("div", "stop"));
+    card.appendChild(progress);
+  }
+}
+
+function renderLines(groups) {
+  const list = $("lines");
   list.innerHTML = "";
-  if (!data.arrivals.length) {
+  for (const g of groups) {
+    const [bus, after] = g.buses;
     const li = document.createElement("li");
-    li.textContent = "No buses expected right now.";
-    list.appendChild(li);
-  }
-  for (const a of data.arrivals) {
-    const li = document.createElement("li");
-    const line = document.createElement("span");
-    line.className = "line";
-    line.textContent = a.line;
-    const dest = document.createElement("span");
-    dest.className = "dest";
-    dest.textContent = a.destination;
-    const eta = document.createElement("span");
-    eta.className = "eta" + (a.seconds < 180 ? " soon" : "");
-    eta.textContent = formatEta(a.seconds);
-    if (a.seconds < NO_ESTIMATE && a.distance >= 0) {
-      const small = document.createElement("small");
-      small.textContent = formatDistance(a.distance);
-      eta.appendChild(small);
-    }
-    li.append(line, dest, eta);
-    list.appendChild(li);
-  }
+    const row = el("div", "line-row");
 
-  $("updated-text").textContent = `Live · updated ${new Date(data.updated).toLocaleTimeString()}`;
+    const text = el("span", "stop-text");
+    text.append(
+      el("span", "stop-name", g.destination),
+      el("span", "stop-sub", bus.seconds < NO_ESTIMATE ? formatAway(bus.distance) : "No estimate yet")
+    );
+
+    const eta = el("span", "eta-col");
+    eta.appendChild(el("span", "first" + (bus.seconds < SOON_SECONDS ? " soon" : ""), formatEta(bus.seconds)));
+    eta.appendChild(el("span", "next", after ? `then ${formatEta(after.seconds)}` : "no later bus yet"));
+
+    row.append(el("span", "badge", g.line), text, eta);
+    li.appendChild(row);
+    list.appendChild(li);
+  }
+}
+
+function renderStop(data) {
+  const groups = groupByLine(data.arrivals);
+  $("stop-name").textContent = data.stop.name;
+  $("stop-badge").textContent = `Stop ${data.stop.id}`;
+  $("stop-address").textContent = data.stop.address || "";
+  $("live-text").textContent = `Live · ${new Date(data.updated).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}`;
+  renderNextCard(groups);
+  renderLines(groups);
+  renderMap(data);
 }
 
 function ensureMap() {
   if (map) return;
-  map = L.map("map");
-  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  map = L.map("map", { zoomControl: false, attributionControl: true });
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 19,
-    attribution: "&copy; OpenStreetMap contributors",
+    attribution: "&copy; OpenStreetMap",
   }).addTo(map);
 }
 
@@ -230,7 +385,10 @@ function renderMap(data) {
   if (stopMarker) stopMarker.remove();
   stopMarker = null;
   if (data.stop.coords) {
-    stopMarker = L.circleMarker(data.stop.coords, { radius: 9, color: "#d4002a", weight: 3, fillOpacity: 1, fillColor: "#fff" })
+    stopMarker = L.marker(data.stop.coords, {
+      icon: L.divIcon({ className: "map-stop", iconSize: [26, 26] }),
+      zIndexOffset: 500,
+    })
       .bindPopup(`<b>${escapeHtml(data.stop.name)}</b><br>Stop ${escapeHtml(data.stop.id)}`)
       .addTo(map);
     points.push(data.stop.coords);
@@ -239,7 +397,7 @@ function renderMap(data) {
   if (userMarker) userMarker.remove();
   userMarker = null;
   if (userPos) {
-    userMarker = L.circleMarker(userPos, { radius: 7, color: "#fff", weight: 2, fillOpacity: 1, fillColor: "#1a73e8" })
+    userMarker = L.marker(userPos, { icon: L.divIcon({ className: "map-you", iconSize: [16, 16] }) })
       .bindPopup("You")
       .addTo(map);
   }
@@ -250,17 +408,18 @@ function renderMap(data) {
     if (!a.coords || a.seconds >= NO_ESTIMATE) continue;
     const key = `${a.bus}-${a.line}`;
     seen.add(key);
-    const popup = `Line ${escapeHtml(a.line)} → ${escapeHtml(a.destination)}<br>${formatEta(a.seconds)} · ${formatDistance(a.distance)} away<br>Bus ${escapeHtml(a.bus)}`;
+    const popup = `Line ${escapeHtml(a.line)} → ${escapeHtml(titleCase(a.destination))}<br>${formatEta(a.seconds)} · ${formatAway(a.distance)}`;
     let marker = busMarkers.get(key);
     if (marker) {
       marker.setLatLng(a.coords);
       marker.setPopupContent(popup);
     } else {
-      const icon = L.divIcon({ className: "bus-icon", html: escapeHtml(a.line), iconSize: [34, 22] });
+      const icon = L.divIcon({ className: "", html: `<span class="map-bus">${escapeHtml(a.line)}</span>`, iconSize: [0, 0] });
       marker = L.marker(a.coords, { icon }).bindPopup(popup).addTo(map);
       busMarkers.set(key, marker);
     }
-    points.push(a.coords);
+    // Only frame buses that are close, so far-away ones don't zoom the map out to the whole city.
+    if (a.distance <= 1200) points.push(a.coords);
   }
   for (const [key, marker] of busMarkers) {
     if (!seen.has(key)) {
@@ -286,11 +445,18 @@ function clearMap() {
   fitted = false;
 }
 
-async function refresh() {
+function setFullscreen(on) {
+  $("map-wrap").classList.toggle("fullscreen", on);
+  $("map-close").hidden = !on;
+  document.body.style.overflow = on ? "hidden" : "";
+  if (map) setTimeout(() => map.invalidateSize(), 0);
+}
+
+async function refreshStop() {
   if (!currentStop) return;
   const id = currentStop.id;
   try {
-    const data = await getJson(`/api/arrivals?stop=${encodeURIComponent(id)}`);
+    const data = await fetchArrivals(id);
     if (!currentStop || id !== currentStop.id) return;
     currentStop.name = data.stop.name;
     // Keep a favorite's saved name in sync with EMT's.
@@ -299,9 +465,7 @@ async function refresh() {
       fav.name = data.stop.name;
       saveFavorites();
     }
-    showError("");
-    renderArrivals(data);
-    renderMap(data);
+    renderStop(data);
   } catch (err) {
     if (currentStop && id === currentStop.id) showError(err.message);
   }
@@ -309,18 +473,11 @@ async function refresh() {
 
 // ---------- routing (#stop/72) ----------
 
-// True when the stop was opened from the home screen, so Back can return there via history.
-let openedFromHome = false;
-
-function openStop(id) {
-  openedFromHome = true;
-  location.hash = `#stop/${id}`;
-}
-
 function route() {
-  clearInterval(timer);
-  timer = null;
-  showError("");
+  clearInterval(stopTimer);
+  clearInterval(heroTimer);
+  stopTimer = heroTimer = null;
+  setFullscreen(false);
   const match = location.hash.match(/^#stop\/(\d{1,6})$/);
 
   if (match) {
@@ -330,39 +487,40 @@ function route() {
     clearMap();
     $("home").hidden = true;
     $("stop-view").hidden = false;
-    $("back-btn").hidden = false;
-    $("fav-btn").hidden = false;
-    $("title").textContent = currentStop.name;
-    $("stop-meta").textContent = `Stop ${id}`;
-    $("arrivals").innerHTML = "";
-    $("updated-text").textContent = "Loading…";
+    $("stop-name").textContent = currentStop.name;
+    $("stop-badge").textContent = `Stop ${id}`;
+    $("stop-address").textContent = "";
+    $("live-text").textContent = "Loading…";
+    $("next-card").innerHTML = '<span class="eyebrow">Next bus</span>';
+    $("lines").innerHTML = "";
     renderFavButton();
-    refresh();
-    timer = setInterval(refresh, REFRESH_MS);
+    window.scrollTo(0, 0);
+    refreshStop();
+    stopTimer = setInterval(refreshStop, REFRESH_MS);
   } else {
     currentStop = null;
     openedFromHome = false;
     $("home").hidden = false;
     $("stop-view").hidden = true;
-    $("back-btn").hidden = true;
-    $("fav-btn").hidden = true;
-    $("title").textContent = "idiBre";
     renderHome();
+    refreshHero();
+    heroTimer = setInterval(refreshHero, REFRESH_MS);
   }
 }
 
 // ---------- events ----------
 
-$("add-form").addEventListener("submit", (e) => {
+$("search").addEventListener("submit", (e) => {
   e.preventDefault();
   const id = $("stop-input").value.trim();
   if (!/^\d{1,6}$/.test(id)) return showError("Enter the stop number (digits only).");
   $("stop-input").value = "";
   $("stop-input").blur();
-  openStop(id);
+  openedFromHome = true;
+  location.hash = `#stop/${id}`;
 });
 
-for (const btn of document.querySelectorAll(".tabs button")) {
+for (const btn of document.querySelectorAll(".segmented button")) {
   btn.addEventListener("click", () => {
     tab = btn.dataset.tab;
     storageSet(TAB_KEY, tab);
@@ -371,8 +529,17 @@ for (const btn of document.querySelectorAll(".tabs button")) {
   });
 }
 
+$("hero").addEventListener("click", () => { openedFromHome = true; });
+
+$("edit-btn").addEventListener("click", () => {
+  editing = !editing;
+  renderHome();
+});
+
 $("locate-btn").addEventListener("click", findNearby);
 $("fav-btn").addEventListener("click", () => currentStop && toggleFavorite(currentStop));
+$("fullscreen-btn").addEventListener("click", () => setFullscreen(true));
+$("map-close").addEventListener("click", () => setFullscreen(false));
 
 $("back-btn").addEventListener("click", () => {
   // Opened from a direct link: go to the home screen instead of leaving the site.
@@ -383,7 +550,9 @@ $("back-btn").addEventListener("click", () => {
 window.addEventListener("hashchange", route);
 
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") refresh();
+  if (document.visibilityState !== "visible") return;
+  if (currentStop) refreshStop();
+  else refreshHero();
 });
 
 if (!storageGet(FAV_KEY) && favorites.length) saveFavorites();

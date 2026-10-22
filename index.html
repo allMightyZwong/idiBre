@@ -4,50 +4,104 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>idiBre · Madrid bus times</title>
-  <meta name="theme-color" content="#d4002a">
+  <meta name="theme-color" content="#F2F3F5">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&display=swap">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header>
-    <button id="back-btn" class="icon" type="button" aria-label="Back" hidden>&#8592;</button>
-    <h1 id="title">idiBre</h1>
-    <button id="fav-btn" class="icon star" type="button" aria-label="Save as favorite" aria-pressed="false" hidden>&#9734;</button>
-  </header>
-
-  <main>
-    <section id="home">
-      <form id="add-form" autocomplete="off">
-        <input id="stop-input" inputmode="numeric" pattern="\d{1,6}" placeholder="Stop number, e.g. 72" aria-label="Stop number" required>
-        <button type="submit">Open</button>
-      </form>
-
-      <div class="tabs" role="tablist">
-        <button type="button" role="tab" data-tab="favorites">&#9733; Favorites</button>
-        <button type="button" role="tab" data-tab="nearby">&#9673; Nearby</button>
+  <!-- Home: search, favorites, nearby -->
+  <section id="home" class="screen">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="3" width="16" height="15" rx="3"/><path d="M4 11h16"/><path d="M8 21v-3M16 21v-3"/><circle cx="8" cy="14.5" r=".6" fill="#fff"/><circle cx="16" cy="14.5" r=".6" fill="#fff"/></svg>
+        </div>
+        <span>idiBre</span>
       </div>
+    </div>
 
-      <div id="favorites-panel" role="tabpanel">
-        <ul id="fav-list" class="stops"></ul>
-        <p id="fav-empty" class="hint">No favorites yet. Open a stop by number or from <b>Nearby</b>, then tap &#9734; to save it here.</p>
+    <h1 class="headline">Where are<br>you going?</h1>
+
+    <form id="search" class="search" autocomplete="off">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5B6470" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <label for="stop-input" class="sr-only">Stop number</label>
+      <input id="stop-input" inputmode="numeric" pattern="\d{1,6}" placeholder="Stop number, e.g. 72" required>
+      <button type="submit" class="primary">Go</button>
+    </form>
+
+    <div class="segmented" role="tablist">
+      <button type="button" role="tab" data-tab="favorites">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z"/></svg>
+        Favorites
+      </button>
+      <button type="button" role="tab" data-tab="nearby">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-6-6.5-11a6.5 6.5 0 0113 0c0 5-6.5 11-6.5 11z"/><circle cx="12" cy="10" r="2.3"/></svg>
+        Nearby
+      </button>
+    </div>
+
+    <div id="favorites-panel" class="panel" role="tabpanel">
+      <a id="hero" class="hero" hidden></a>
+      <div id="saved-section" class="section">
+        <div class="section-head">
+          <span class="label">Saved stops</span>
+          <button id="edit-btn" type="button" class="link">Edit</button>
+        </div>
+        <ul id="fav-list" class="card list"></ul>
       </div>
+      <p id="fav-empty" class="empty">No favorites yet. Open a stop by number or from <b>Nearby</b>, then tap the star to save it here.</p>
+    </div>
 
-      <div id="nearby-panel" role="tabpanel" hidden>
-        <button id="locate-btn" class="secondary" type="button">Find stops near me</button>
-        <ul id="nearby-list" class="stops"></ul>
-        <p id="nearby-status" class="hint"></p>
+    <div id="nearby-panel" class="panel" role="tabpanel" hidden>
+      <ul id="nearby-list" class="card list"></ul>
+      <p id="nearby-status" class="empty"></p>
+      <button id="locate-btn" type="button" class="secondary">Find stops near me</button>
+    </div>
+  </section>
+
+  <!-- Stop: next bus, all lines, map -->
+  <section id="stop-view" class="screen" hidden>
+    <div class="topbar">
+      <button id="back-btn" type="button" class="round" aria-label="Back">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#111418" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+      </button>
+      <button id="fav-btn" type="button" class="round" aria-pressed="false" aria-label="Add to favorites">
+        <svg width="20" height="20" viewBox="0 0 24 24" stroke="#C98A00" stroke-width="1.8" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5l2.6 5.3 5.9.9-4.25 4.1 1 5.8L12 16.9l-5.25 2.7 1-5.8L3.5 9.7l5.9-.9z"/></svg>
+      </button>
+    </div>
+
+    <div class="title-block">
+      <h1 id="stop-name"></h1>
+      <div class="meta">
+        <span id="stop-badge" class="badge-soft"></span>
+        <span id="stop-address"></span>
+        <span class="live"><span class="dot"></span><span id="live-text">Live</span></span>
       </div>
-    </section>
+    </div>
 
-    <section id="stop-view" hidden>
-      <p id="stop-meta" class="hint"></p>
-      <ul id="arrivals"></ul>
-      <p id="updated" class="hint"><span class="live-dot"></span><span id="updated-text"></span></p>
-      <div id="map"></div>
-    </section>
+    <div id="next-card" class="next-card"></div>
 
-    <p id="error" role="alert" hidden></p>
-  </main>
+    <div class="section">
+      <span class="label">All lines</span>
+      <ul id="lines" class="card list"></ul>
+    </div>
+
+    <div class="section">
+      <div class="section-head">
+        <span class="label">On the map</span>
+        <button id="fullscreen-btn" type="button" class="link">Full screen</button>
+      </div>
+      <div id="map-wrap" class="map-wrap">
+        <div id="map"></div>
+        <button id="map-close" type="button" class="map-close" hidden>Close</button>
+      </div>
+    </div>
+  </section>
+
+  <p id="error" role="alert" hidden></p>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="app.js"></script>

@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
         appHost = Uri.parse(appUrl).getHost();
 
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(getColor(R.color.accent));
+        root.setBackgroundColor(getColor(R.color.background));
         webView = new WebView(this);
         root.addView(webView, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
