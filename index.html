@@ -12,6 +12,11 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Pull-to-refresh indicator, slides down from the top while pulling -->
+  <div id="ptr" class="ptr" aria-hidden="true">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 11-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+  </div>
+
   <!-- Home: search, favorites, nearby -->
   <section id="home" class="screen">
     <div class="topbar">
@@ -47,7 +52,7 @@
       <a id="hero" class="hero" hidden></a>
       <div id="saved-section" class="section">
         <div class="section-head">
-          <span class="label">Saved stops</span>
+          <span id="saved-label" class="label">Saved stops</span>
           <button id="edit-btn" type="button" class="link">Edit</button>
         </div>
         <ul id="fav-list" class="card list"></ul>

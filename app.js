@@ -8,7 +8,7 @@ const SOON_SECONDS = 180;
 const $ = (id) => document.getElementById(id);
 
 const CHEVRON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#9AA2AD" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>';
-const BUS_GLYPH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#B0001A" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><rect x="5" y="4" width="14" height="13" rx="2.5"/><path d="M8 20v-3M16 20v-3"/></svg>';
+const BUS_GLYPH = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0B7A04" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><rect x="5" y="4" width="14" height="13" rx="2.5"/><path d="M8 20v-3M16 20v-3"/></svg>';
 
 let favorites = loadFavorites();
 let tab = storageGet(TAB_KEY) === "nearby" ? "nearby" : "favorites";
@@ -54,9 +54,87 @@ const isFavorite = (id) => favorites.some((f) => f.id === id);
 
 function toggleFavorite(stop) {
   if (isFavorite(stop.id)) favorites = favorites.filter((f) => f.id !== stop.id);
-  else favorites.push({ id: stop.id, name: stop.name });
+  else favorites.push({ id: stop.id, name: stop.name, coords: stop.coords || null });
   saveFavorites();
   renderFavButton();
+}
+
+// Remember a favorite's name and position from fresh EMT data (older favorites were saved without a position).
+function syncFavorite(stop) {
+  const fav = favorites.find((f) => f.id === stop.id);
+  if (!fav) return false;
+  const changed = fav.name !== stop.name || (stop.coords && !fav.coords);
+  if (changed) {
+    fav.name = stop.name;
+    if (stop.coords) fav.coords = stop.coords;
+    saveFavorites();
+  }
+  return changed;
+}
+
+// ---------- location ----------
+
+let locating = null;
+let locationError = null;
+
+function locate() {
+  if (!navigator.geolocation) return Promise.resolve(null);
+  if (!locating) {
+    locating = new Promise((resolve) => {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          userPos = [pos.coords.latitude, pos.coords.longitude];
+          locationError = null;
+          resolve(userPos);
+        },
+        (err) => {
+          locationError = err;
+          resolve(null);
+        },
+        { enableHighAccuracy: true, timeout: 15000, maximumAge: 30000 }
+      );
+    }).finally(() => { locating = null; });
+  }
+  return locating;
+}
+
+function distanceMeters(a, b) {
+  const rad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * rad;
+  const dLng = (b[1] - a[1]) * rad;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * rad) * Math.cos(b[0] * rad) * Math.sin(dLng / 2) ** 2;
+  return 2 * 6371000 * Math.asin(Math.sqrt(h));
+}
+
+// Favorites closest to you first; ones without a known position keep their saved order at the end.
+function orderedFavorites() {
+  return favorites
+    .map((f, i) => ({ ...f, i, dist: userPos && f.coords ? distanceMeters(userPos, f.coords) : null }))
+    .sort((a, b) => (a.dist ?? Infinity) - (b.dist ?? Infinity) || a.i - b.i);
+}
+
+let backfilling = false;
+
+// Looks up the position of favorites saved before positions were stored, so they can be sorted.
+async function backfillCoords() {
+  if (backfilling || !userPos) return;
+  const missing = favorites.filter((f) => !f.coords);
+  if (!missing.length) return;
+  backfilling = true;
+  let changed = false;
+  for (const f of missing) {
+    try {
+      const data = await fetchArrivals(f.id);
+      changed = syncFavorite(data.stop) || changed;
+    } catch {
+      // Skip this one; it stays at the end of the list.
+    }
+  }
+  backfilling = false;
+  if (changed && !currentStop) {
+    renderHome();
+    refreshHero();
+  }
 }
 
 // ---------- helpers ----------
@@ -135,9 +213,9 @@ const fetchArrivals = (id) => getJson(`/api/arrivals?stop=${encodeURIComponent(i
 
 // ---------- home ----------
 
-function stopRow(stop, subtitle, tall) {
+function stopRow(stop, { subtitle, tall, removable } = {}) {
   const li = document.createElement("li");
-  const row = el("a", "stop-row" + (tall ? " tall" : ""));
+  const row = el("a", "stop-row" + (tall || subtitle ? " tall" : ""));
   row.href = `#stop/${stop.id}`;
   row.addEventListener("click", () => { openedFromHome = true; });
 
@@ -146,7 +224,7 @@ function stopRow(stop, subtitle, tall) {
   if (subtitle) text.appendChild(el("span", "stop-sub", subtitle));
   row.append(el("span", "stop-id", stop.id), text);
 
-  if (editing && isFavorite(stop.id) && !subtitle) {
+  if (removable && editing) {
     const remove = el("button", "remove-btn", "Remove");
     remove.type = "button";
     remove.addEventListener("click", (e) => {
@@ -176,7 +254,10 @@ function renderHome() {
 
   const favList = $("fav-list");
   favList.innerHTML = "";
-  for (const f of favorites) favList.appendChild(stopRow(f));
+  for (const f of orderedFavorites()) {
+    favList.appendChild(stopRow(f, { subtitle: f.dist != null ? `${formatDistance(f.dist)} from you` : "", removable: true }));
+  }
+  $("saved-label").textContent = userPos ? "Saved stops · closest first" : "Saved stops";
   $("saved-section").hidden = favorites.length === 0;
   $("fav-empty").hidden = favorites.length > 0;
   $("edit-btn").textContent = editing ? "Done" : "Edit";
@@ -185,13 +266,13 @@ function renderHome() {
   const nearList = $("nearby-list");
   nearList.innerHTML = "";
   for (const s of nearby) {
-    const lines = s.lines.length ? s.lines.join(", ") : "";
-    nearList.appendChild(stopRow(s, [formatDistance(s.distance), lines].filter(Boolean).join(" · "), true));
+    const lines = s.lines.join(", ");
+    nearList.appendChild(stopRow(s, { subtitle: [formatDistance(s.distance), lines].filter(Boolean).join(" · "), tall: true }));
   }
   $("locate-btn").textContent = nearby.length ? "Refresh location" : "Find stops near me";
 }
 
-// The dark card on the home screen: live next bus at the first favorite.
+// The dark card on the home screen: live next bus at the closest favorite.
 function renderHero(stop, data) {
   const hero = $("hero");
   hero.href = `#stop/${stop.id}`;
@@ -238,7 +319,7 @@ function renderHero(stop, data) {
 }
 
 async function refreshHero() {
-  const stop = favorites[0];
+  const stop = orderedFavorites()[0];
   if (!stop || currentStop) {
     if (!stop) $("hero").hidden = true;
     return;
@@ -249,40 +330,45 @@ async function refreshHero() {
   }
   try {
     const data = await fetchArrivals(stop.id);
-    if (favorites[0] && favorites[0].id === stop.id && !currentStop) renderHero(stop, data);
+    syncFavorite(data.stop);
+    if (!currentStop && $("hero").dataset.stop === stop.id) renderHero(stop, data);
   } catch (err) {
     showError(err.message);
   }
 }
 
-function findNearby() {
+async function findNearby() {
   if (!navigator.geolocation) {
     $("nearby-status").textContent = "Location isn't available on this device.";
     return;
   }
   $("nearby-status").textContent = "Finding your location…";
-  navigator.geolocation.getCurrentPosition(
-    async (pos) => {
-      userPos = [pos.coords.latitude, pos.coords.longitude];
-      $("nearby-status").textContent = "Loading nearby stops…";
-      try {
-        const data = await getJson(`/api/nearby?lat=${userPos[0]}&lng=${userPos[1]}&radius=500`);
-        nearby = data.stops;
-        $("nearby-status").textContent = nearby.length ? "" : "No EMT stops within 500 m.";
-      } catch (err) {
-        $("nearby-status").textContent = "";
-        showError(err.message);
-      }
-      renderHome();
-    },
-    (err) => {
-      $("nearby-status").textContent =
-        err.code === err.PERMISSION_DENIED
-          ? "Location permission was denied. Allow it to see stops near you."
-          : "Couldn't get your location. Try again.";
-    },
-    { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
-  );
+  if (!(await locate())) {
+    $("nearby-status").textContent =
+      locationError && locationError.code === locationError.PERMISSION_DENIED
+        ? "Location permission was denied. Allow it to see stops near you."
+        : "Couldn't get your location. Try again.";
+    return;
+  }
+  $("nearby-status").textContent = "Loading nearby stops…";
+  try {
+    const data = await getJson(`/api/nearby?lat=${userPos[0]}&lng=${userPos[1]}&radius=500`);
+    nearby = data.stops;
+    $("nearby-status").textContent = nearby.length ? "" : "No EMT stops within 500 m.";
+  } catch (err) {
+    $("nearby-status").textContent = "";
+    showError(err.message);
+  }
+  renderHome();
+}
+
+// Re-reads your location, then re-sorts favorites and refreshes the live card (and nearby list if open).
+async function refreshHome() {
+  await locate();
+  if (currentStop) return;
+  renderHome();
+  backfillCoords();
+  await Promise.all([refreshHero(), tab === "nearby" ? findNearby() : null]);
 }
 
 // ---------- stop page ----------
@@ -459,12 +545,8 @@ async function refreshStop() {
     const data = await fetchArrivals(id);
     if (!currentStop || id !== currentStop.id) return;
     currentStop.name = data.stop.name;
-    // Keep a favorite's saved name in sync with EMT's.
-    const fav = favorites.find((f) => f.id === id);
-    if (fav && fav.name !== data.stop.name) {
-      fav.name = data.stop.name;
-      saveFavorites();
-    }
+    currentStop.coords = data.stop.coords;
+    syncFavorite(data.stop);
     renderStop(data);
   } catch (err) {
     if (currentStop && id === currentStop.id) showError(err.message);
@@ -483,7 +565,7 @@ function route() {
   if (match) {
     const id = match[1];
     const known = favorites.find((f) => f.id === id) || nearby.find((s) => s.id === id);
-    currentStop = { id, name: known ? known.name : `Stop ${id}` };
+    currentStop = { id, name: known ? known.name : `Stop ${id}`, coords: known ? known.coords : null };
     clearMap();
     $("home").hidden = true;
     $("stop-view").hidden = false;
@@ -504,6 +586,7 @@ function route() {
     $("stop-view").hidden = true;
     renderHome();
     refreshHero();
+    refreshHome();
     heroTimer = setInterval(refreshHero, REFRESH_MS);
   }
 }
@@ -552,7 +635,59 @@ window.addEventListener("hashchange", route);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (currentStop) refreshStop();
-  else refreshHero();
+  else refreshHome();
+});
+
+// ---------- pull to refresh ----------
+
+const PTR_TRIGGER = 64; // px the indicator must be pulled down to refresh
+let ptrStartY = null;
+let ptrPull = 0;
+let ptrBusy = false;
+
+function setPtr(pull, spinning) {
+  const ptr = $("ptr");
+  ptr.classList.toggle("spinning", spinning);
+  ptr.classList.toggle("ready", pull >= PTR_TRIGGER);
+  ptr.style.transform = `translate(-50%, ${pull - 56}px) rotate(${spinning ? 0 : pull * 4}deg)`;
+  ptr.style.opacity = String(Math.min(1, pull / 40));
+}
+
+document.addEventListener("touchstart", (e) => {
+  if (ptrBusy || window.scrollY > 0 || e.touches.length !== 1) return;
+  if (e.target.closest("#map-wrap") || $("map-wrap").classList.contains("fullscreen")) return;
+  ptrStartY = e.touches[0].clientY;
+  ptrPull = 0;
+  $("ptr").classList.add("dragging");
+}, { passive: true });
+
+document.addEventListener("touchmove", (e) => {
+  if (ptrStartY == null) return;
+  const dy = e.touches[0].clientY - ptrStartY;
+  if (dy <= 0 || window.scrollY > 0) {
+    ptrPull = 0;
+    setPtr(0, false);
+    return;
+  }
+  e.preventDefault(); // stop the page itself from scrolling or bouncing while pulling
+  ptrPull = Math.min(110, dy * 0.5);
+  setPtr(ptrPull, false);
+}, { passive: false });
+
+document.addEventListener("touchend", async () => {
+  if (ptrStartY == null) return;
+  ptrStartY = null;
+  $("ptr").classList.remove("dragging");
+  if (ptrPull < PTR_TRIGGER) {
+    setPtr(0, false);
+    return;
+  }
+  ptrBusy = true;
+  setPtr(PTR_TRIGGER, true);
+  const minSpin = new Promise((r) => setTimeout(r, 600));
+  await Promise.all([currentStop ? refreshStop() : refreshHome(), minSpin]);
+  setPtr(0, false);
+  ptrBusy = false;
 });
 
 if (!storageGet(FAV_KEY) && favorites.length) saveFavorites();

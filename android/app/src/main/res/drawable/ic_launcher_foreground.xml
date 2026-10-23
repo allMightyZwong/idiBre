@@ -15,10 +15,10 @@
         android:pathData="M39,72h8v5a2,2 0,0 1,-2 2h-4a2,2 0,0 1,-2 -2zM61,72h8v5a2,2 0,0 1,-2 2h-4a2,2 0,0 1,-2 -2z" />
     <!-- windscreen -->
     <path
-        android:fillColor="#D4002A"
+        android:fillColor="#14B908"
         android:pathData="M40,42h28v14h-28z" />
     <!-- headlights -->
     <path
-        android:fillColor="#D4002A"
+        android:fillColor="#14B908"
         android:pathData="M42,63a3,3 0,1 0,6 0a3,3 0,1 0,-6 0zM60,63a3,3 0,1 0,6 0a3,3 0,1 0,-6 0z" />
 </vector>
